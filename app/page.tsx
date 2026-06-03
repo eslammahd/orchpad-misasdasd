@@ -19,9 +19,7 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [selectedSlot, setSelectedSlot] = useState<Slot | null>(null);
 
-  useEffect(() => {
-    fetchSlots();
-  }, []);
+  useEffect(() => { fetchSlots(); }, []);
 
   async function fetchSlots() {
     setLoading(true);
@@ -40,7 +38,6 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-gradient-to-b from-teal-50 to-white">
-      {/* Hero */}
       <section className="bg-gradient-to-r from-teal-700 to-teal-600 text-white">
         <div className="max-w-5xl mx-auto px-6 py-16 text-center">
           <div className="w-20 h-20 bg-white/20 rounded-full flex items-center justify-center mx-auto mb-6">
@@ -56,7 +53,6 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Features */}
       <section className="max-w-5xl mx-auto px-6 py-12">
         <div className="grid md:grid-cols-3 gap-6">
           {[
@@ -73,7 +69,6 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Slots */}
       <section id="slots" className="max-w-5xl mx-auto px-6 pb-16">
         <h2 className="text-2xl font-bold text-gray-900 mb-6 text-center">Available Sessions</h2>
         {loading ? (

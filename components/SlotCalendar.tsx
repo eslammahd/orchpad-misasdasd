@@ -10,12 +10,13 @@ type Slot = {
   is_available: boolean;
 };
 
-type Props = {
+export default function SlotCalendar({
+  slots,
+  onSelectSlot,
+}: {
   slots: Slot[];
   onSelectSlot: (slot: Slot) => void;
-};
-
-export default function SlotCalendar({ slots, onSelectSlot }: Props) {
+}) {
   if (slots.length === 0) {
     return (
       <div className="text-center py-16 text-gray-400">
@@ -25,7 +26,6 @@ export default function SlotCalendar({ slots, onSelectSlot }: Props) {
     );
   }
 
-  // Group by date
   const grouped: Record<string, Slot[]> = {};
   for (const slot of slots) {
     if (!grouped[slot.slot_date]) grouped[slot.slot_date] = [];
@@ -39,12 +39,15 @@ export default function SlotCalendar({ slots, onSelectSlot }: Props) {
           <div className="bg-teal-50 border-b border-teal-100 px-6 py-3">
             <h3 className="font-semibold text-teal-800">
               {new Date(date + 'T00:00:00').toLocaleDateString('en-GB', {
-                weekday: 'long', day: 'numeric', month: 'long', year: 'numeric'
+                weekday: 'long',
+                day: 'numeric',
+                month: 'long',
+                year: 'numeric',
               })}
             </h3>
           </div>
           <div className="p-4 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-            {daySlots.map(slot => (
+            {daySlots.map((slot) => (
               <button
                 key={slot.id}
                 onClick={() => onSelectSlot(slot)}
