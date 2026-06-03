@@ -1,149 +1,278 @@
 'use client';
-
 import { useState } from 'react';
-import { supabase, type Slot } from '@/lib/supabase';
-import PaymentForm from '@/components/PaymentForm';
+import { createClient } from '@/lib/supabase/client';
 
-interface Props {
+type Slot = {
+  id: string;
+  slot_date: string;
+  slot_time: string;
+  session_type: string;
+  duration_minutes: number;
+  price: number;
+};
+
+type Props = {
   slot: Slot;
   onClose: () => void;
-  onBooked: () => void;
-}
+  onSuccess: () => void;
+};
 
-function formatDate(dateStr: string) {
-  const d = new Date(dateStr + 'T00:00:00');
-  return d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
-}
+type Step = 'details' | 'payment' | 'success';
 
-function formatTime(timeStr: string) {
-  const [h, m] = timeStr.split(':');
-  const hour = parseInt(h);
-  const ampm = hour >= 12 ? 'PM' : 'AM';
-  const displayHour = hour % 12 || 12;
-  return `${displayHour}:${m} ${ampm}`;
-}
-
-type Step = 'details' | 'payment' | 'confirmation';
-
-export default function BookingModal({ slot, onClose, onBooked }: Props) {
+export default function BookingModal({ slot, onClose, onSuccess }: Props) {
   const [step, setStep] = useState<Step>('details');
-  const [bookingId, setBookingId] = useState<string>('');
-  const [form, setForm] = useState({ full_name: '', email: '', phone: '', notes: '' });
+  const [form, setForm] = useState({ name: '', email: '', phone: '' });
+  const [payment, setPayment] = useState({ method: 'vodafone_cash', reference: '' });
+  const [loading, setLoading] = useState(false);
+  const [bookingId, setBookingId] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [submitting, setSubmitting] = useState(false);
 
-  function validate() {
-    const errs: Record<string, string> = {};
-    if (!form.full_name.trim()) errs.full_name = 'Name is required';
-    if (!form.email.trim() || !/^[^@]+@[^@]+\.[^@]+$/.test(form.email)) errs.email = 'Valid email required';
-    if (!form.phone.trim() || !/^[0-9+\-\s]{10,15}$/.test(form.phone)) errs.phone = 'Valid phone required';
-    return errs;
+  function validateDetails() {
+    const e: Record<string, string> = {};
+    if (!form.name.trim()) e.name = 'Name is required';
+    if (!form.email.match(/^[^@]+@[^@]+\.[^@]+$/)) e.email = 'Valid email required';
+    if (!form.phone.match(/^[0-9+\s-]{10,15}$/)) e.phone = 'Valid phone number required';
+    setErrors(e);
+    return Object.keys(e).length === 0;
   }
 
-  async function handleSubmitDetails(e: React.FormEvent) {
-    e.preventDefault();
-    const errs = validate();
-    if (Object.keys(errs).length > 0) { setErrors(errs); return; }
-    setSubmitting(true);
+  async function handleSubmit() {
+    if (!validateDetails()) return;
+    setStep('payment');
+  }
 
-    // Create patient
-    const { data: patient, error: pErr } = await supabase
-      .from('patients')
-      .insert({ full_name: form.full_name, email: form.email, phone: form.phone, notes: form.notes || null })
-      .select()
-      .single();
-
-    if (pErr || !patient) { setSubmitting(false); setErrors({ submit: 'Something went wrong. Please try again.' }); return; }
-
-    // Create booking
-    const { data: booking, error: bErr } = await supabase
-      .from('bookings')
-      .insert({ patient_id: patient.id, slot_id: slot.id, status: 'pending' })
-      .select()
-      .single();
-
-    if (bErr || !booking) { setSubmitting(false); setErrors({ submit: 'This slot may have just been taken. Please go back and choose another.' }); return; }
+  async function handlePayment() {
+    if (!payment.reference.trim()) {
+      setErrors({ reference: 'Please enter your payment reference number' });
+      return;
+    }
+    setLoading(true);
+    setErrors({});
+    const supabase = createClient();
 
     // Mark slot unavailable
     await supabase.from('slots').update({ is_available: false }).eq('id', slot.id);
 
+    // Create booking
+    const { data: booking, error } = await supabase
+      .from('bookings')
+      .insert({
+        slot_id: slot.id,
+        patient_name: form.name,
+        patient_email: form.email,
+        patient_phone: form.phone,
+        payment_method: payment.method,
+        payment_reference: payment.reference,
+        status: 'pending',
+      })
+      .select()
+      .single();
+
+    if (error || !booking) {
+      setErrors({ submit: 'Something went wrong. Please try again.' });
+      setLoading(false);
+      return;
+    }
+
+    // Create payment record
+    await supabase.from('payments').insert({
+      booking_id: booking.id,
+      amount: slot.price,
+      payment_method: payment.method,
+      transaction_reference: payment.reference,
+      status: 'pending',
+    });
+
     setBookingId(booking.id);
-    setSubmitting(false);
-    setStep('payment');
+    setLoading(false);
+    setStep('success');
   }
 
+  const slotLabel = `${new Date(slot.slot_date + 'T00:00:00').toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })} at ${slot.slot_time}`;
+
   return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden">
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
         {/* Header */}
-        <div className="bg-gradient-to-r from-blue-800 to-indigo-800 text-white px-6 py-5">
-          <div className="flex justify-between items-start">
-            <div>
-              <div className="text-blue-200 text-sm font-medium mb-1">Booking Session with Dr. Saad</div>
-              <div className="text-xl font-bold">{formatDate(slot.slot_date)}</div>
-              <div className="text-blue-100 mt-1">{formatTime(slot.slot_time)} · {slot.duration_minutes} min · {slot.price_egp} EGP</div>
-            </div>
-            <button onClick={onClose} className="text-white/70 hover:text-white text-2xl leading-none">×</button>
+        <div className="flex items-center justify-between p-6 border-b border-gray-100">
+          <div>
+            <h2 className="text-lg font-bold text-gray-900">
+              {step === 'details' && 'Your Details'}
+              {step === 'payment' && 'Payment'}
+              {step === 'success' && 'Booking Confirmed!'}
+            </h2>
+            <p className="text-sm text-gray-500 mt-0.5">{slotLabel} · {slot.session_type}</p>
           </div>
-          {/* Steps */}
-          <div className="flex items-center gap-2 mt-4 text-xs">
-            {(['details', 'payment', 'confirmation'] as Step[]).map((s, i) => (
-              <div key={s} className="flex items-center gap-2">
-                <div className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs ${step === s ? 'bg-white text-blue-800' : i < (['details','payment','confirmation'] as Step[]).indexOf(step) ? 'bg-blue-400 text-white' : 'bg-white/20 text-white/60'}`}>{i+1}</div>
-                <span className={step === s ? 'text-white' : 'text-white/60'}>{s.charAt(0).toUpperCase() + s.slice(1)}</span>
-                {i < 2 && <span className="text-white/30">›</span>}
-              </div>
-            ))}
-          </div>
+          {step !== 'success' && (
+            <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">×</button>
+          )}
         </div>
 
-        <div className="px-6 py-6">
+        <div className="p-6">
+          {/* Step 1: Patient Details */}
           {step === 'details' && (
-            <form onSubmit={handleSubmitDetails} className="space-y-4">
+            <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Full Name *</label>
-                <input type="text" value={form.full_name} onChange={e => setForm(f => ({...f, full_name: e.target.value}))} placeholder="Your full name" className={`w-full border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${errors.full_name ? 'border-red-400' : 'border-slate-200'}`} />
-                {errors.full_name && <p className="text-red-500 text-xs mt-1">{errors.full_name}</p>}
+                <label className="block text-sm font-medium text-gray-700 mb-1">Full Name</label>
+                <input
+                  type="text"
+                  value={form.name}
+                  onChange={e => setForm({...form, name: e.target.value})}
+                  className="w-full border border-gray-300 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 text-gray-900"
+                  placeholder="Your full name"
+                />
+                {errors.name && <p className="text-red-500 text-xs mt-1">{errors.name}</p>}
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Email Address *</label>
-                <input type="email" value={form.email} onChange={e => setForm(f => ({...f, email: e.target.value}))} placeholder="you@example.com" className={`w-full border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${errors.email ? 'border-red-400' : 'border-slate-200'}`} />
+                <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+                <input
+                  type="email"
+                  value={form.email}
+                  onChange={e => setForm({...form, email: e.target.value})}
+                  className="w-full border border-gray-300 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 text-gray-900"
+                  placeholder="your@email.com"
+                />
                 {errors.email && <p className="text-red-500 text-xs mt-1">{errors.email}</p>}
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Phone Number *</label>
-                <input type="tel" value={form.phone} onChange={e => setForm(f => ({...f, phone: e.target.value}))} placeholder="01xxxxxxxxx" className={`w-full border rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 ${errors.phone ? 'border-red-400' : 'border-slate-200'}`} />
+                <label className="block text-sm font-medium text-gray-700 mb-1">Phone</label>
+                <input
+                  type="tel"
+                  value={form.phone}
+                  onChange={e => setForm({...form, phone: e.target.value})}
+                  className="w-full border border-gray-300 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 text-gray-900"
+                  placeholder="01xxxxxxxxx"
+                />
                 {errors.phone && <p className="text-red-500 text-xs mt-1">{errors.phone}</p>}
               </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1">Notes (optional)</label>
-                <textarea value={form.notes} onChange={e => setForm(f => ({...f, notes: e.target.value}))} placeholder="Any specific concerns or notes for Dr. Saad..." rows={3} className="w-full border border-slate-200 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" />
+              <div className="bg-teal-50 rounded-xl p-4 mt-2">
+                <div className="flex justify-between text-sm">
+                  <span className="text-gray-600">Session</span>
+                  <span className="font-medium text-gray-900">{slot.session_type}</span>
+                </div>
+                <div className="flex justify-between text-sm mt-1">
+                  <span className="text-gray-600">Duration</span>
+                  <span className="font-medium text-gray-900">{slot.duration_minutes} min</span>
+                </div>
+                <div className="flex justify-between text-sm mt-1 pt-2 border-t border-teal-100">
+                  <span className="font-semibold text-gray-900">Total</span>
+                  <span className="font-bold text-teal-700 text-lg">{slot.price} EGP</span>
+                </div>
               </div>
-              {errors.submit && <p className="text-red-500 text-sm bg-red-50 rounded-lg px-4 py-2">{errors.submit}</p>}
-              <button type="submit" disabled={submitting} className="w-full bg-blue-700 hover:bg-blue-800 disabled:opacity-60 text-white font-semibold py-3 rounded-xl transition">
-                {submitting ? 'Saving...' : 'Continue to Payment →'}
+              <button
+                onClick={handleSubmit}
+                className="w-full bg-teal-600 hover:bg-teal-700 text-white font-semibold py-3 rounded-xl transition-colors"
+              >
+                Continue to Payment
               </button>
-            </form>
+            </div>
           )}
 
+          {/* Step 2: Payment */}
           {step === 'payment' && (
-            <PaymentForm
-              bookingId={bookingId}
-              amount={slot.price_egp}
-              onPaid={() => setStep('confirmation')}
-            />
+            <div className="space-y-5">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Payment Method</label>
+                <div className="grid grid-cols-2 gap-3">
+                  {[
+                    { value: 'vodafone_cash', label: '📱 Vodafone Cash' },
+                    { value: 'instapay', label: '💳 InstaPay' },
+                  ].map(m => (
+                    <button
+                      key={m.value}
+                      onClick={() => setPayment({...payment, method: m.value})}
+                      className={`border-2 rounded-xl p-4 text-sm font-medium transition-all ${
+                        payment.method === m.value
+                          ? 'border-teal-500 bg-teal-50 text-teal-700'
+                          : 'border-gray-200 text-gray-600 hover:border-teal-300'
+                      }`}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm">
+                {payment.method === 'vodafone_cash' ? (
+                  <>
+                    <p className="font-semibold text-amber-800 mb-1">📱 Vodafone Cash Instructions</p>
+                    <p className="text-amber-700">Send <strong>{slot.price} EGP</strong> to:</p>
+                    <p className="font-mono font-bold text-amber-900 text-lg mt-1">010-XXXX-XXXX</p>
+                    <p className="text-amber-600 text-xs mt-2">(Dr. Saad will update this with his real number)</p>
+                  </>
+                ) : (
+                  <>
+                    <p className="font-semibold text-amber-800 mb-1">💳 InstaPay Instructions</p>
+                    <p className="text-amber-700">Transfer <strong>{slot.price} EGP</strong> to:</p>
+                    <p className="font-mono font-bold text-amber-900 text-lg mt-1">dr.saad@instapay</p>
+                    <p className="text-amber-600 text-xs mt-2">(Dr. Saad will update this with his real address)</p>
+                  </>
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Payment Reference Number</label>
+                <input
+                  type="text"
+                  value={payment.reference}
+                  onChange={e => setPayment({...payment, reference: e.target.value})}
+                  className="w-full border border-gray-300 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-teal-500 text-gray-900"
+                  placeholder="Enter the transaction reference"
+                />
+                {errors.reference && <p className="text-red-500 text-xs mt-1">{errors.reference}</p>}
+              </div>
+
+              {errors.submit && (
+                <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl px-4 py-3 text-sm">{errors.submit}</div>
+              )}
+
+              <div className="flex gap-3">
+                <button onClick={() => setStep('details')} className="flex-1 border border-gray-300 text-gray-700 font-medium py-3 rounded-xl hover:bg-gray-50 transition-colors">
+                  Back
+                </button>
+                <button
+                  onClick={handlePayment}
+                  disabled={loading}
+                  className="flex-1 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white font-semibold py-3 rounded-xl transition-colors"
+                >
+                  {loading ? 'Submitting…' : 'Confirm Booking'}
+                </button>
+              </div>
+            </div>
           )}
 
-          {step === 'confirmation' && (
-            <div className="text-center py-6">
+          {/* Step 3: Success */}
+          {step === 'success' && (
+            <div className="text-center py-4">
               <div className="text-6xl mb-4">✅</div>
-              <h3 className="text-2xl font-bold text-slate-800 mb-2">Booking Received!</h3>
-              <p className="text-slate-500 mb-4">Thank you, <strong>{form.full_name}</strong>. Your booking is pending confirmation from Dr. Saad.</p>
-              <div className="bg-blue-50 rounded-xl p-4 text-sm text-blue-800 mb-6">
-                <p>📧 You will receive an email at <strong>{form.email}</strong> once Dr. Saad confirms your session.</p>
-                <p className="mt-2">Your Zoom meeting link will be included in the confirmation email.</p>
+              <h3 className="text-xl font-bold text-gray-900 mb-2">Booking Submitted!</h3>
+              <p className="text-gray-600 mb-4">
+                Thank you, <strong>{form.name}</strong>! Dr. Saad will review your booking and confirm your session.
+              </p>
+              <div className="bg-teal-50 rounded-xl p-4 text-sm text-left mb-6 space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Session</span>
+                  <span className="font-medium">{slotLabel}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Type</span>
+                  <span className="font-medium">{slot.session_type}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Payment</span>
+                  <span className="font-medium capitalize">{payment.method.replace('_', ' ')}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Reference</span>
+                  <span className="font-mono text-xs">{payment.reference}</span>
+                </div>
               </div>
-              <button onClick={() => { onBooked(); }} className="w-full bg-blue-700 hover:bg-blue-800 text-white font-semibold py-3 rounded-xl transition">
+              <p className="text-sm text-gray-500 mb-4">You'll receive a Zoom meeting link at <strong>{form.email}</strong> once confirmed.</p>
+              <button
+                onClick={onSuccess}
+                className="w-full bg-teal-600 hover:bg-teal-700 text-white font-semibold py-3 rounded-xl transition-colors"
+              >
                 Done
               </button>
             </div>

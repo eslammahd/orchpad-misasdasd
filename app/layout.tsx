@@ -2,16 +2,14 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Dr. Saad — Online Therapy Sessions',
-  description: 'Book your online therapy session with Dr. Saad. Easy scheduling, secure payment, and comfortable online sessions.',
+  title: 'Dr. Saad Therapy',
+  description: 'Online therapy sessions with Dr. Saad',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className="min-h-screen bg-slate-50">
-        {children}
-      </body>
+      <body>{children}</body>
     </html>
   );
 }
